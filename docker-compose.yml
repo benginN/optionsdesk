@@ -1,0 +1,21 @@
+services:
+  opsiyon-masasi:
+    image: ghcr.io/benginn/optionsdesk:latest
+    # Kaynaktan derlemek istersen üstteki satırı yoruma al, bunu aç:
+    # build: .
+    container_name: opsiyon-masasi
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - TZ=Europe/Istanbul   # sadece loglar için; zamanlayıcı her zaman ABD saatini (ET) kullanır
+      - PUID=1000            # data/ klasörünün sahibi olacak kullanıcı
+      - PGID=1000
+    volumes:
+      - ./data:/app/data
+    # Glance'in docker-containers widget'ı bu etiketleri okur (isteğe bağlı)
+    labels:
+      glance.name: Opsiyon Masası
+      glance.icon: mdi:chart-bell-curve
+      glance.url: http://localhost:8000   # homelab adresinle değiştir, ör. http://192.168.1.10:8000
+      glance.description: ABD opsiyon analizi

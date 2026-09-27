@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+data
+**/node_modules
+frontend/dist
+**/__pycache__
+**/*.pyc
+*.tsbuildinfo
+*.app
+.DS_Store
+.env
