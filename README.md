@@ -1,135 +1,132 @@
-# Opsiyon Masası
+# Options Desk (Opsiyon Masası)
 
-ABD opsiyonları için kişisel analiz sitesi: piyasa notu, strateji bazlı hisse ve kontrat tarayıcıları,
-portföy planı, anomali/arbitraj taraması, strateji laboratuvarı ve işlem defteri. Aylık maliyeti **$0**
-(tamamen ücretsiz veri kaynakları).
+A self-hosted analytics site for US equity options: a daily market brief, strategy-based stock and
+contract screeners, a weekly portfolio plan, an anomaly/arbitrage scanner, a strategy lab and a trade
+journal. It runs entirely on **free data sources**, so it costs **$0 per month**.
 
-> **English:** A self-hosted options analytics desk for US equities: market overview, strategy-based
-> stock and contract screeners, a weekly portfolio plan (cash-secured puts, covered calls, LEAPS),
-> anomaly/arbitrage scanner, strategy lab and trade journal. The UI is available in **Turkish and English**
-> (TR / EN toggle, top right). Uses only free data sources (CBOE delayed quotes, Yahoo, Nasdaq, FRED).
-> Quick start: `docker compose up -d` → http://localhost:8000 (see [Docker](#docker) below).
+The UI is available in **English and Turkish** (EN / TR toggle, top right) and has two modes: **Simple**
+(plain language, suggestions, explanations) and **Pro** (every table and metric).
 
-## Çalıştırma
-
-### Docker (önerilen, homelab / sunucu)
-
-Bkz. [Docker](#docker). Sunucu sürekli açık kaldığı için IV geçmişi hiç gün atlamadan birikir.
-
-### macOS
-
-En kolayı: klasördeki **Opsiyon Masası** uygulamasına çift tıkla. Sunucu çalışmıyorsa arka planda başlatır ve siteyi açar.
-
-Terminal'den:
+## Quick start (Docker)
 
 ```bash
-./run.sh
-```
-
-İlk seferde Python ortamını ve arayüzü kurar, sonra `http://localhost:8000` adresini açar.
-Arayüz kodunu değiştirdiysen `REBUILD=1 ./run.sh`.
-
-İlk açılışta ~200 hisselik evrenin snapshot'ı otomatik başlar (~6–10 dk). Sunucu açık kaldığı sürece
-hafta içi her gün **16:30 ET**'den sonra yeni snapshot alınır; IV geçmişi böyle birikir.
-
-## Docker
-
-Hazır imaj her `main` güncellemesinde GitHub Container Registry'ye yayınlanır
-(`ghcr.io/benginn/optionsdesk`, amd64 + arm64 — Raspberry Pi dahil).
-
-```bash
-mkdir opsiyon-masasi && cd opsiyon-masasi
+mkdir optionsdesk && cd optionsdesk
 curl -O https://raw.githubusercontent.com/benginN/optionsdesk/main/docker-compose.yml
 docker compose up -d
 ```
 
-Site `http://<sunucu-ip>:8000` adresinde açılır. Tek satırla da çalıştırılabilir:
+Then open `http://<server-ip>:8000`.
+
+On first launch the app snapshots its ~200-symbol universe automatically (takes ~6–10 min). While the
+server is running, it takes a new snapshot every weekday after **4:30 PM ET**, which is how the
+implied-volatility history builds up. That's why an always-on server (homelab, NAS, VPS) is the best
+place to run it: no days are skipped.
+
+## Docker
+
+A prebuilt image is published to GitHub Container Registry on every push to `main`:
+`ghcr.io/benginn/optionsdesk` (amd64 + arm64, so it runs on a Raspberry Pi too).
+
+One-liner without Compose:
 
 ```bash
-docker run -d --name opsiyon-masasi --restart unless-stopped \
+docker run -d --name optionsdesk --restart unless-stopped \
   -p 8000:8000 -v "$PWD/data:/app/data" ghcr.io/benginn/optionsdesk:latest
 ```
 
-Kaynaktan derlemek için repoyu klonla, `docker-compose.yml` içinde `image:` satırını yoruma alıp
-`build: .` satırını aç, sonra `docker compose up -d --build`.
+To build from source, clone the repo, comment out the `image:` line in `docker-compose.yml`, uncomment
+`build: .`, and run `docker compose up -d --build`.
 
-| Ayar | Varsayılan | Açıklama |
+| Setting | Default | Description |
 |---|---|---|
-| `-v ./data:/app/data` | — | SQLite veritabanı (snapshot geçmişi, işlem defteri, ayarlar) ve önbellek. **Yedeklenecek tek klasör budur.** |
-| `PORT` | `8000` | Container içindeki port |
-| `PUID` / `PGID` | `1000` | Sunucunun çalıştığı ve `data/` klasörünün sahibi olan kullanıcı |
+| `-v ./data:/app/data` | — | SQLite database (snapshot history, trade journal, holdings, settings) and cache. **This is the only folder you need to back up.** |
+| `PORT` | `8000` | Port inside the container |
+| `PUID` / `PGID` | `1000` | User the server runs as; it also owns the `data/` folder |
 
-Güncelleme: `docker compose pull && docker compose up -d`. Veriler `data/` klasöründe kalır.
+Update: `docker compose pull && docker compose up -d`. Your data stays in `data/`.
 
-> ⚠️ Uygulamada kullanıcı girişi yok. Yerel ağda kullan; internete açacaksan önüne kimlik doğrulamalı
-> bir reverse proxy (Authelia, Authentik, Cloudflare Access, Tailscale vb.) koy.
+> ⚠️ The app has no login. Keep it on your local network. If you expose it to the internet, put an
+> authenticating reverse proxy in front of it (Authelia, Authentik, Cloudflare Access, Tailscale, etc.).
 
 ### Glance
 
-[Glance](https://github.com/glanceapp/glance) panonda iki şekilde gösterebilirsin:
+You can add it to a [Glance](https://github.com/glanceapp/glance) dashboard in two ways:
 
-- **Yer imi:** `bookmarks` ya da `monitor` widget'ına `http://<sunucu-ip>:8000` ekle
-  (monitor için sağlık adresi: `/api/health`).
-- **Docker container listesi:** `docker-compose.yml` içindeki `glance.*` etiketleri hazır;
-  Glance'in `docker-containers` widget'ı container'ı adı, ikonu ve linkiyle otomatik gösterir
-  (`glance.url` etiketini kendi sunucu adresinle değiştir).
+- **Link / monitor:** add `http://<server-ip>:8000` to a `bookmarks` or `monitor` widget.
+  The health endpoint for the monitor is `/api/health`.
+- **Docker containers widget:** `docker-compose.yml` already has `glance.*` labels, so Glance's
+  `docker-containers` widget shows the container with its name, icon and link. Change the
+  `glance.url` label to your server's address.
 
 ```yaml
 - type: monitor
   title: Homelab
   sites:
-    - title: Opsiyon Masası
+    - title: Options Desk
       url: http://192.168.1.10:8000
       check-url: http://192.168.1.10:8000/api/health
       icon: mdi:chart-bell-curve
 ```
 
-## Bölümler
+## Running without Docker
 
-Site Türkçe ve İngilizce (sağ üstte TR / EN) ve iki modda çalışır: **Basit** (sade dil, öneriler, açıklamalar) ve **Uzman** (tüm tablolar ve metrikler).
+Requires Python 3.10+ and Node.js 18+.
 
-| Bölüm | Ne yapar |
+```bash
+./run.sh
+```
+
+The first run sets up the Python environment and builds the UI, then opens `http://localhost:8000`.
+If you've changed the frontend code, run `REBUILD=1 ./run.sh`.
+
+On macOS you can also double-click **Opsiyon Masası.app** in the project folder. It starts the server
+in the background if it isn't already running and opens the site.
+
+## Sections
+
+| Section | What it does |
 |---|---|
-| **Bugün** | Piyasanın ruh hali ve prim satıcısı için ortam (göstergeler), sade dilde özet, "Bugün ne yapabilirsin?" (strateji başına en iyi fikirler), endekslerin haftalık beklenen aralığı, yaklaşan bilançolar ve büyük işlemler. Uzman modda günlük değişim tablosu, VIX, liderler. |
-| **Fikirler** | 3 adım: ne yapmak istiyorsun (nakitle put sat / hissene call yaz / uzun vadeli call al) → bütçe, risk, süre → hisse kartları. "Kontratları gör" her kontratı tek cümleyle anlatır, Simüle et / Kaydet. Uzman modda tablo görünümü ve gelişmiş çoklu tarayıcı (kredi spread'leri dahil). |
-| **Hisse sayfası** | "Opsiyonlar bu hisse hakkında ne söylüyor?", 30 günlük beklenen aralık, "opsiyonlar ne kadar pahalı?" göstergesi, strateji kartları; detaylı analizde vade yapısı, gülümseme, açık pozisyon, gamma, olağandışı işlemler. |
-| **Portföyüm** | Planım: hisselerin + nakdin için numaralı adımlarla haftalık plan (put'lar, covered call'lar, primle LEAPS). İşlemlerim: defter, canlı pozisyon kartları, %50 kuralı / ITM uyarıları, atanma ve değersiz bitme oranları. |
-| **Araçlar** | Strateji laboratuvarı (sade dilde özet, kâr/zarar eğrisi, olasılık, senaryolar) ve anomali tarayıcı. |
-| **Öğren** | Opsiyonları 10 dakikada anla, 5 adımlı öğrenme yolu, kural seti, kaçınılacaklar, sözlük. |
+| **Today** | Market mood and conditions for premium sellers (gauges), a plain-language summary, "What can you do today?" (top ideas per strategy), weekly expected moves for the indices, upcoming earnings and large trades. Pro mode adds the daily movers table, VIX and leaders. |
+| **Ideas** | Three steps: pick a goal (sell cash-secured puts / write calls on your shares / buy long-dated calls) → set budget, risk and time frame → get stock cards. "See contracts" explains each contract in a single sentence, with Simulate / Save. Pro mode adds a table view and an advanced multi-screener (including credit spreads). |
+| **Stock page** | "What are options saying about this stock?", the 30-day expected range, a "how expensive are options?" gauge and strategy cards. The detailed view shows term structure, volatility smile, open interest, gamma and unusual activity. |
+| **My portfolio** | *My plan:* a numbered weekly plan for your shares and cash (puts, covered calls, premium-funded LEAPS). *My trades:* a trade journal, live position cards, 50%-rule and ITM alerts, assignment and expire-worthless rates. |
+| **Tools** | Strategy lab (plain-language summary, P&L curve, probabilities, scenarios) and the anomaly scanner. |
+| **Learn** | Options in 10 minutes, a 5-step learning path, a rule set, mistakes to avoid and a glossary. |
 
-## Veri kaynakları
+## Data sources
 
-- **CBOE gecikmeli kotasyon** (ücretsiz, 15 dk gecikmeli): tüm zincir, Greeks, IV, OI, hacim, IV30, VIX ailesi.
-  Limit yaklaşık 5 dakikada ~100 istek; uygulama istekleri otomatik aralıklandırır.
-- **Yahoo** (ücretsiz): 3 yıllık günlük fiyat → HV, RSI, 52 haftalık aralık.
-- **Nasdaq** (ücretsiz): 60 günlük bilanço takvimi.
-- **FRED** (ücretsiz): 3 aylık T-Bill → risksiz faiz.
+- **CBOE delayed quotes** (free, 15-minute delay): full chains, Greeks, IV, open interest, volume, IV30 and the VIX family.
+  The limit is roughly ~100 requests per 5 minutes; the app spaces requests out automatically.
+- **Yahoo** (free): 3 years of daily prices → HV, RSI, 52-week range.
+- **Nasdaq** (free): 60-day earnings calendar.
+- **FRED** (free): 3-month T-Bill → risk-free rate.
 
-## Bilinen sınırlar
+## Known limitations
 
-- **IV Pos** ilk 20 işlem günü boyunca tahminidir (≈): IV30'un son 1 yıllık HV30 dağılımındaki yeri.
-  Snapshot'lar biriktikçe gerçek IV yüzdeliğine geçer. Sunucu kapalı olduğu günler atlanır (Docker ile sürekli açık tutmak bu yüzden idealdir).
-- Hisse bacaklı arbitraj kontrolleri (conversion/reversal, içsel değer) sadece seans içinde çalışır.
-- Temettüler modele dahil değildir; Amerikan tipi erken kullanım yaklaşık olarak dikkate alınır.
-- Skorlar sıralama aracıdır, yatırım tavsiyesi değildir.
+- **IV Pos** is an estimate (≈) for the first 20 trading days: where IV30 sits within the past year's
+  HV30 distribution. It switches to the true IV percentile as snapshots accumulate. Days when the
+  server is off are skipped.
+- Arbitrage checks that involve the stock leg (conversion/reversal, intrinsic value) only run during market hours.
+- Dividends aren't modeled; early exercise of American options is only approximated.
+- Scores are a ranking tool, not investment advice.
 
-## Yapı
+## Project structure
 
 ```
 backend/app/
-  main.py            API uçları + arayüz servisi
-  jobs.py            günlük snapshot ve zamanlayıcı
-  data/              CBOE, Yahoo, Nasdaq, FRED istemcileri + önbellek
-  analytics/         chain (zincir analizi), metrics, scoring, contracts, anomalies, smile, market, bs
+  main.py            API endpoints + serves the UI
+  jobs.py            daily snapshot and scheduler
+  data/              CBOE, Yahoo, Nasdaq and FRED clients + cache
+  analytics/         chain analysis, metrics, scoring, contracts, anomalies, smile, market, Black-Scholes
   journal.py plan.py db.py
 frontend/src/
-  pages/             her sekme bir sayfa
-  components/        tablo, grafikler, UI parçaları
-data/options.db      snapshot geçmişi, defter, hisseler, ayarlar (SQLite)
-Dockerfile, docker-compose.yml, .github/workflows/docker.yml   Docker imajı ve otomatik yayın
+  pages/             one page per tab
+  components/        tables, charts, UI pieces
+data/options.db      snapshot history, journal, holdings, settings (SQLite, created at runtime)
+Dockerfile, docker-compose.yml, .github/workflows/docker.yml   Docker image and automated publishing
 ```
 
-## Lisans
+## License
 
-[MIT](LICENSE). Skorlar ve öneriler eğitim amaçlıdır, yatırım tavsiyesi değildir. Veri kaynaklarının
-kullanım koşullarına uymak kullanıcının sorumluluğundadır.
+[MIT](LICENSE). Scores and suggestions are for educational purposes only and are not investment advice.
+You are responsible for complying with the terms of use of the data sources.
