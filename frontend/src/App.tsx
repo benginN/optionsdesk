@@ -22,6 +22,7 @@ export interface Status {
   rate: number;
   progress: { running: boolean; done: number; total: number; failed: number; current: string | null; trade_date: string | null };
   last_run: { ok: number; failed: number; errors: string[]; started?: string; finished?: string; trade_date?: string } | null;
+  live?: { enabled: boolean; active: boolean; running: boolean; paused: string | null; count: number; total: number; newest: string | null; delay_min: number; cycle_min: number };
 }
 
 function useStatus() {
@@ -53,6 +54,17 @@ function DataStatus({ s, reload }: { s: Status | null; reload: () => void }) {
     await api("/snapshot", { method: "POST" });
     reload();
   };
+  const lv = s.live;
+  if (lv?.active && !p.running) {
+    return (
+      <span className="pill" title={t(
+        `Gün içi tarama (CBOE, ${lv.delay_min} dk gecikmeli): bugün tazelenen hisse ${lv.count}/${lv.total}, her hisse ~${lv.cycle_min} dk'da bir yenilenir. Kapanış verisi 16:30 ET'den sonra kendiliğinden alınır.`,
+        `Intraday scan (CBOE, ${lv.delay_min}-min delayed): ${lv.count} of ${lv.total} stocks refreshed today, each every ~${lv.cycle_min} min. Closing data is captured automatically after 4:30 PM ET.`)}>
+        <span className="dot" style={{ color: lv.paused ? "var(--amber)" : "var(--green)" }} />
+        <span className="hide-sm">{t("Canlı", "Live")} · {String(lv.newest || "").slice(11, 16)} ET</span>
+      </span>
+    );
+  }
   if (p.running) {
     return (
       <span className="pill" title={t("Tüm hisseler için veriler çekiliyor", "Fetching data for every stock")}>
@@ -62,8 +74,10 @@ function DataStatus({ s, reload }: { s: Status | null; reload: () => void }) {
     );
   }
   return (
-    <button className="pill" onClick={start} style={{ cursor: "pointer" }}
-      title={t("Verileri şimdi yenile (~10 dk sürer)", "Refresh data now (takes ~10 min)")}>
+    <button className="pill" onClick={s.market_open ? undefined : start} style={{ cursor: s.market_open ? "default" : "pointer" }}
+      title={s.market_open
+        ? t("Piyasa açık: kapanış verisi 16:30 ET'den sonra kendiliğinden alınır.", "Market is open: closing data is captured automatically after 4:30 PM ET.")
+        : t("Verileri şimdi yenile (~10 dk sürer)", "Refresh data now (takes ~10 min)")}>
       <span className="dot" style={{ color: s.market_open ? "var(--green)" : "var(--muted)" }} />
       <span className="hide-sm">
         {s.latest_snapshot ? t(`${dateTR(s.latest_snapshot)} kapanışı`, `${dateTR(s.latest_snapshot)} close`) : t("Veri yok", "No data")}

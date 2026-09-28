@@ -374,7 +374,9 @@ export default function Today({ status }: { status: Status | null }) {
       <Welcome />
       <div className="page-head">
         <div>
-          <div className="kicker"><Icon name="clock" size={15} /> {greeting(t)} · {t(`${dateTR(d.date, true)} kapanışına göre, ${d.agg.n} hisse incelendi`, `Based on the ${dateTR(d.date, true)} close, ${d.agg.n} stocks reviewed`)}</div>
+          <div className="kicker"><Icon name="clock" size={15} /> {greeting(t)} · {d.basis?.universe === "live"
+            ? t(`Canlı veri (${d.live.delay_min} dk gecikmeli) · bugün tazelenen hisse ${d.live.count}/${d.live.total}`, `Live data (${d.live.delay_min}-min delayed) · ${d.live.count} of ${d.live.total} stocks refreshed today`)
+            : t(`${dateTR(d.snapshot_date || d.date, true)} kapanışına göre, ${d.agg.n} hisse incelendi${d.basis?.vix === "live" ? " · VIX canlı" : ""}`, `Based on the ${dateTR(d.snapshot_date || d.date, true)} close, ${d.agg.n} stocks reviewed${d.basis?.vix === "live" ? " · VIX live" : ""}`)}</div>
           <h1>{headline}</h1>
         </div>
       </div>
@@ -409,7 +411,7 @@ export default function Today({ status }: { status: Status | null }) {
       <div className="section">
         <SectionHead title={t("Bugün ne yapabilirsin?", "What can you do today?")}
           sub={t("Durumuna uyan yolu seç. Her fikir, kısa bir açıklama ve riskleriyle birlikte gelir.", "Pick the path that fits you. Every idea comes with a short explanation and its risks.")} />
-        <FreshnessNote f={ideasLive.data?.freshness} warnCount={ideasLive.data?.warn_count} />
+        <FreshnessNote f={ideasLive.data?.freshness} warnCount={ideasLive.data?.warn_count} live={ideasLive.data?.live_scan} />
         <div className="grid g3">
           {(["csp", "cc", "leaps"] as Strat[]).map((s) => <StrategyCard key={s} s={s} ideas={d.ideas?.[s] || []} hasHoldings={hasHoldings} live={liveFor(s)} />)}
         </div>

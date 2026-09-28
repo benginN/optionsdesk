@@ -42,6 +42,8 @@ To build from source, clone the repo, comment out the `image:` line in `docker-c
 | `-v ./data:/app/data` | — | SQLite database (snapshot history, trade journal, holdings, settings) and cache. **This is the only folder you need to back up.** |
 | `PORT` | `8000` | Port inside the container |
 | `PUID` / `PGID` | `1000` | User the server runs as; it also owns the `data/` folder |
+| `INTRADAY_REFRESH` | `0` | `1` turns on the intraday scan: while the market is open, stocks are re-priced one by one (15-min delayed CBOE data) and ideas, the market summary and the strategy compass use the fresher numbers. The daily closing snapshot (IV history) is unchanged. Off by default to go easy on the free data source. |
+| `INTRADAY_PACE_SEC` | `6` | Seconds between intraday requests (min. 3). 6 s ≈ the whole ~200-stock universe every ~20 min, leaving headroom under CBOE's ~100 requests / 5 min for page loads. |
 
 Update: `docker compose pull && docker compose up -d`. Your data stays in `data/`.
 

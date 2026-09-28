@@ -11,6 +11,8 @@ services:
       - TZ=Europe/Istanbul   # log timestamps only; the scheduler always uses US Eastern Time
       - PUID=1000            # user that runs the server and owns ./data
       - PGID=1000
+      # - INTRADAY_REFRESH=1     # re-price stocks during market hours (15-min delayed); see README
+      # - INTRADAY_PACE_SEC=6    # seconds between intraday requests (~200 stocks every ~20 min)
     volumes:
       - ./data:/app/data
     # Read by Glance's docker-containers widget (optional)

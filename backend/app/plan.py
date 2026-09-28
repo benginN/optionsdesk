@@ -66,7 +66,7 @@ async def build(params: dict) -> dict:
     # --- CSP dağılımı ---
     investable = cash * (1 - reserve_pct / 100)
     max_pos = cash * max_pos_pct / 100
-    snap_date, snap = services.enriched_snapshot()
+    snap_date, snap = services.current_rows()
     ranked = sorted(
         [m for m in snap.values() if m.get("scores", {}).get("csp") is not None and m.get("csp")],
         key=lambda m: m["scores"]["csp"], reverse=True,

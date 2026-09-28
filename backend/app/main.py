@@ -14,7 +14,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db, jobs, journal, plan, services
+from . import db, intraday, jobs, journal, plan, services
 from .analytics import anomalies, bs, market, metrics, scoring, stance
 from .analytics.contracts import PRESETS, Filters, scan_chain
 from .analytics.pricing import prob_otm
@@ -50,9 +50,11 @@ async def lifespan(app: FastAPI):
     db.init_db()
     task = asyncio.create_task(jobs.scheduler())
     warm = asyncio.create_task(warm_loop())
+    live = asyncio.create_task(intraday.loop(lambda: jobs.progress["running"]))
     yield
     task.cancel()
     warm.cancel()
+    live.cancel()
     await cboe.close_client()
 
 
@@ -106,6 +108,7 @@ async def status():
         "last_run": db.last_run(),
         "rate": await risk_free_rate(),
         "freshness": freshness(dates[0] if dates else None),
+        "live": services.live_meta(dates[0] if dates else None),
     }
 
 
@@ -138,6 +141,11 @@ def freshness(snapshot_date: str | None) -> dict:
 async def start_snapshot():
     if jobs.progress["running"]:
         return jobs.progress
+    if market_is_open():
+        # Gün içi alınan snapshot o günün "kapanışı" diye kaydedilir; zamanlayıcı da günün verisi var
+        # sanıp gerçek kapanışı almaz (IV geçmişi bozulur). Gün içini intraday.py taşır.
+        raise HTTPException(409, L("Piyasa açıkken tam tarama başlatılmaz: kapanış verisi 16:30 ET'den sonra kendiliğinden alınır.",
+                                   "A full scan can't start while the market is open: the closing data is captured automatically after 4:30 PM ET."))
 
     async def run():
         await jobs.run_snapshot()
@@ -237,12 +245,19 @@ async def market_note():
     msnaps = db.load_market_snapshots(250)
     if not msnaps:
         return {"empty": True, "progress": jobs.progress}
-    cur = msnaps[-1]
-    prev = msnaps[-2] if len(msnaps) > 1 else None
-    note = market.build_note(cur["agg"], prev["agg"] if prev else None, cur.get("vix"))
-    d, rows = services.enriched_snapshot()
+    d, rows = services.current_rows()
     dates = db.snapshot_dates(2)
-    prev_rows = db.load_snapshot(dates[1]) if len(dates) > 1 else {}
+    now = await _market_now(d, rows)
+    if now["basis"]["universe"] == "live":
+        # Gün içi: bugünkü tabloyu son kapanışla karşılaştır
+        cur = {"date": datetime.now(ET).date().isoformat(), "agg": now["agg"], "vix": now["vix"]}
+        prev = msnaps[-1]
+        prev_rows = db.load_snapshot(dates[0]) if dates else {}
+    else:
+        cur = {**msnaps[-1], "vix": now["vix"] or msnaps[-1].get("vix")}
+        prev = msnaps[-2] if len(msnaps) > 1 else None
+        prev_rows = db.load_snapshot(dates[1]) if len(dates) > 1 else {}
+    note = market.build_note(cur["agg"], prev["agg"] if prev else None, cur.get("vix"))
     series = [{"date": s["date"], **{k: s["agg"].get(k) for k in ("iv30", "hv30", "vrp", "skew", "pcr_oi", "change", "iv1y")},
                "vix": (s.get("vix") or {}).get("vix")} for s in msnaps]
     ivps = sorted(m["iv_pos"] for m in rows.values() if m.get("iv_pos") is not None)
@@ -253,7 +268,27 @@ async def market_note():
         "note": note, "story": market.plain_story(cur["agg"], cur.get("vix"), iv_pos_med),
         "iv_pos_median": iv_pos_med, "ideas": _top_ideas(rows),
         "series": series, "leaders": _leaders(rows, prev_rows),
+        "basis": now["basis"], "live": now["live"], "snapshot_date": d,
     }
+
+
+LIVE_MIN_COVERAGE = 0.5   # evrenin en az yarısı gün içi tazelendiyse evren ortalamaları canlıya geçer
+
+
+async def _market_now(d: str | None, rows: dict) -> dict:
+    """Piyasa geneli: VIX her zaman en taze hâliyle (6 istek, önbellekli); evren ortalamaları gün içi
+    tarama evrenin yarısını kapsadıysa canlı, yoksa son kapanış. `basis` hangisinin kullanıldığını söyler."""
+    live = services.live_meta(d)
+    try:
+        vix = dict(await jobs.fetch_vix())
+        vix.pop("vix_series", None)
+    except Exception:
+        vix = None
+    msnaps = db.load_market_snapshots(1)
+    uni_live = live["active"] and live["count"] >= LIVE_MIN_COVERAGE * max(live["total"], 1)
+    agg = market.aggregate(list(rows.values())) if uni_live else (msnaps[-1]["agg"] if msnaps else None)
+    return {"agg": agg, "vix": vix, "live": live,
+            "basis": {"vix": "live" if vix else "close", "universe": "live" if uni_live else "close"}}
 
 
 async def _index_board(sym: str) -> dict:
@@ -297,9 +332,9 @@ async def _build_stance() -> dict:
     vix_rows = vix_rows if isinstance(vix_rows, list) else []
     vix = vix if isinstance(vix, dict) else {}
     board = board if isinstance(board, dict) else None
-    d, rows = services.enriched_snapshot()
-    msnaps = db.load_market_snapshots(1)
-    agg = msnaps[-1]["agg"] if msnaps else None
+    d, rows = services.current_rows()
+    now = await _market_now(d, rows)
+    agg = now["agg"]
     ivps = sorted(m["iv_pos"] for m in rows.values() if m.get("iv_pos") is not None)
     earnings = sorted(
         [{"ticker": m["ticker"], "days": m["days_to_earnings"]} for m in rows.values()
@@ -310,6 +345,7 @@ async def _build_stance() -> dict:
     out["as_of"] = datetime.now(ET).isoformat(timespec="minutes")
     out["snapshot_date"] = d
     out["market_open"] = market_is_open()
+    out["basis"] = now["basis"]
     return out
 
 
@@ -319,7 +355,9 @@ def _warm_ttl() -> float:
 
 
 def _warm_every() -> float:
-    return 600 if market_is_open() else 1800
+    if not market_is_open():
+        return 1800
+    return 300 if intraday.ENABLED else 600
 
 
 @app.get("/api/market/stance")
@@ -363,11 +401,11 @@ async def _live_check(i: dict, key: str) -> dict | None:
 @app.get("/api/ideas/live")
 async def ideas_live(n: int = Query(3, ge=1, le=8)):
     """Strateji başına en iyi n fikir (Bugün sayfası/panel) + her biri için bugünkü fiyatla canlı kontrol."""
-    d, rows = services.enriched_snapshot()
+    d, rows = services.current_rows()
     if not rows:
         return {"empty": True, "freshness": freshness(None)}
     out = await memory.get_or_fetch(f"ideas_live:{d}:{n}", _warm_ttl(), lambda: _build_ideas_live(d, rows, n))
-    return {**out, "freshness": freshness(d)}
+    return {**out, "freshness": freshness(d), "live_scan": services.live_meta(d)}
 
 
 async def _build_ideas_live(d: str, rows: dict, n: int) -> dict:
@@ -392,7 +430,7 @@ async def warm_loop() -> None:
                 for lang in ("tr", "en"):
                     set_lang(lang)
                     memory.set(f"stance:{lang}", await _build_stance(), _warm_ttl())
-                d, rows = services.enriched_snapshot()
+                d, rows = services.current_rows()
                 if rows:
                     for n in (3, 4):
                         memory.set(f"ideas_live:{d}:{n}", await _build_ideas_live(d, rows, n), _warm_ttl())
@@ -405,14 +443,14 @@ async def warm_loop() -> None:
 
 @app.get("/api/screener")
 async def screener():
-    d, rows = services.enriched_snapshot()
+    d, rows = services.current_rows()
     out = []
     for m in rows.values():
         r = {k: v for k, v in m.items() if k not in ("unusual",)}
         r["name"] = _name(m)
         out.append(r)
     out.sort(key=lambda r: (r.get("scores") or {}).get("csp") or 0, reverse=True)
-    return {"date": d, "rows": out, "iv_history_days": len(db.snapshot_dates(400))}
+    return {"date": d, "rows": out, "iv_history_days": len(db.snapshot_dates(400)), "live": services.live_meta(d)}
 
 
 # --- Hisse detayı -----------------------------------------------------------
@@ -505,7 +543,7 @@ async def scan(body: dict = Body(...)):
     tickers = [t.strip().upper() for t in (body.get("tickers") or []) if t and t.strip()]
     if not tickers:
         top = int(body.get("top") or 25)
-        _, rows = services.enriched_snapshot()
+        _, rows = services.current_rows()
         key = "cc" if strategy in ("cc", "ccs") else ("leaps" if strategy == "leaps" else "csp")
         ranked = sorted([m for m in rows.values() if (m.get("scores") or {}).get(key) is not None],
                         key=lambda m: m["scores"][key], reverse=True)

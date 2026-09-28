@@ -3,10 +3,19 @@ import { dateTR } from "../lib/format";
 import { useT } from "../prefs";
 import { Callout } from "./ui";
 
-export function FreshnessNote({ f, warnCount }: { f?: any; warnCount?: number }) {
+export function FreshnessNote({ f, warnCount, live }: { f?: any; warnCount?: number; live?: any }) {
   const t = useT();
   if (!f?.snapshot) return null;
   const d = dateTR(f.snapshot, true);
+  if (live?.active && f.market_open) {
+    return (
+      <div style={{ marginBottom: 14 }}><Callout tone={warnCount ? "warn" : "info"}>
+        {t(`Fikirler gün içi taramadan (${live.delay_min} dk gecikmeli): bugün tazelenen hisse ${live.count}/${live.total}, her hisse ~${live.cycle_min} dk'da bir yenilenir · son ${String(live.newest || "").slice(11, 16)} ET.`,
+          `Ideas come from the intraday scan (${live.delay_min}-min delayed): ${live.count} of ${live.total} stocks refreshed today, each every ~${live.cycle_min} min · last ${String(live.newest || "").slice(11, 16)} ET.`)}
+        {warnCount ? t(` ${warnCount} fikirde aleyhe hareket var (⚠).`, ` ${warnCount} idea(s) have moved against you (⚠).`) : ""}
+      </Callout></div>
+    );
+  }
   if (f.behind > 0) {
     return (
       <div style={{ marginBottom: 14 }}><Callout tone="warn">

@@ -149,7 +149,7 @@ export default function Ideas({ query }: { query: URLSearchParams }) {
         </div>
       </div>
 
-      <FreshnessNote f={status.data?.freshness} />
+      <FreshnessNote f={status.data?.freshness} live={status.data?.live} />
 
       <Step n={1}>{t("Ne yapmak istiyorsun?", "What do you want to do?")}</Step>
       <div className="grid g3">
