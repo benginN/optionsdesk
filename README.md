@@ -86,7 +86,7 @@ in the background if it isn't already running and opens the site.
 
 | Section | What it does |
 |---|---|
-| **Today** | Market mood and conditions for premium sellers (gauges), a plain-language summary, "What can you do today?" (top ideas per strategy), weekly expected moves for the indices, upcoming earnings and large trades. Pro mode adds the daily movers table, VIX and leaders. |
+| **Today** | Market mood and conditions for premium sellers (gauges), a plain-language summary, a **strategy compass** (which strategy type fits the current regime — trend, VIX level, term-structure stress, premium richness, dealer gamma — with suggested delta/expiry/structure/size, the reasons and what would change the view), "What can you do today?" (top ideas per strategy, re-checked against live prices), weekly expected moves for the indices, upcoming earnings and large trades. Pro mode adds the daily movers table, VIX and leaders. |
 | **Ideas** | Three steps: pick a goal (sell cash-secured puts / write calls on your shares / buy long-dated calls) → set budget, risk and time frame → get stock cards. "See contracts" explains each contract in a single sentence, with Simulate / Save. Pro mode adds a table view and an advanced multi-screener (including credit spreads). |
 | **Stock page** | "What are options saying about this stock?", the 30-day expected range, a "how expensive are options?" gauge and strategy cards. The detailed view shows term structure, volatility smile, open interest, gamma and unusual activity. |
 | **My portfolio** | *My plan:* a numbered weekly plan for your shares and cash (puts, covered calls, premium-funded LEAPS). *My trades:* a trade journal, live position cards, 50%-rule and ITM alerts, assignment and expire-worthless rates. |
@@ -117,7 +117,8 @@ backend/app/
   main.py            API endpoints + serves the UI
   jobs.py            daily snapshot and scheduler
   data/              CBOE, Yahoo, Nasdaq and FRED clients + cache
-  analytics/         chain analysis, metrics, scoring, contracts, anomalies, smile, market, Black-Scholes
+  analytics/         chain analysis, metrics, scoring, contracts, anomalies, smile, market, Black-Scholes,
+                     stance (strategy compass rules)
   journal.py plan.py db.py
 frontend/src/
   pages/             one page per tab

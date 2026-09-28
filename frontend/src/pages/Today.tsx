@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { Status } from "../App";
 import { LineChart } from "../components/Charts";
+import Compass from "../components/Compass";
+import { FreshnessNote } from "../components/Freshness";
 import { Bubble, Icon, STRAT_STYLE } from "../components/Icon";
 import { Col, Table } from "../components/Table";
 import {
@@ -55,7 +57,21 @@ function Welcome() {
   );
 }
 
-function StrategyCard({ s, ideas, hasHoldings }: { s: Strat; ideas: any[]; hasHoldings: boolean }) {
+function LiveNote({ s, l }: { s: Strat; l?: any }) {
+  const t = useT();
+  // Kapanıştan bu yana fiyat kıpırdamadıysa gösterme (hafta sonu, piyasa öncesi)
+  if (!l || l.move == null || Math.abs(l.move) < 0.003) return null;
+  return (
+    <div className={`small live-note ${l.warn ? "warn" : "muted"}`}>
+      {l.warn ? "⚠ " : ""}{t("Şimdi", "Now")} {usd(l.spot)} ({spct(l.move, 1)})
+      {s !== "leaps" && l.pop != null && <> · {t(`prim sende kalma ${pct(l.pop, 0)}`, `keep-it-all ${pct(l.pop, 0)}`)}</>}
+      {s !== "leaps" && l.itm && <> · {t("strike aşıldı", "strike breached")}</>}
+      {s === "leaps" && l.be_move != null && <> · {t(`başabaş ${spct(l.be_move, 0)}`, `breakeven ${spct(l.be_move, 0)}`)}</>}
+    </div>
+  );
+}
+
+function StrategyCard({ s, ideas, hasHoldings, live }: { s: Strat; ideas: any[]; hasHoldings: boolean; live?: Record<string, any> }) {
   const t = useT();
   const st = STRAT_STYLE[s];
   const verdict = useVerdict();
@@ -87,6 +103,7 @@ function StrategyCard({ s, ideas, hasHoldings }: { s: Strat; ideas: any[]; hasHo
             <div style={{ minWidth: 0 }}>
               <div className="row" style={{ gap: 8 }}><strong>{i.ticker}</strong><span className="muted small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 150 }}>{i.name}</span></div>
               <div className="small ink2">{line(i)}</div>
+              <LiveNote s={s} l={live?.[i.ticker]} />
             </div>
             <span className="pill" style={{ color: `var(--${verdict(i.score).tone})` }}>{verdict(i.score).label}</span>
           </li>
@@ -305,6 +322,7 @@ export default function Today({ status }: { status: Status | null }) {
   const note = useApi<any>("/market/note", [status?.latest_snapshot]);
   const live = useApi<any>("/market/live");
   const holdings = useApi<any>("/holdings");
+  const ideasLive = useApi<any>("/ideas/live?n=3", [status?.latest_snapshot]);
   const [showMore, setShowMore] = useState(false);
 
   if (note.loading && !note.data) {
@@ -348,6 +366,8 @@ export default function Today({ status }: { status: Status | null }) {
   const headline = t(`${m[0]}, ${pr[0]}.`, `${m[1]}, ${pr[1]}.`);
   const boards = live.data?.boards || [];
   const hasHoldings = (holdings.data?.holdings || []).some((h: any) => h.shares >= 100);
+  const liveFor = (s: Strat): Record<string, any> =>
+    Object.fromEntries(((ideasLive.data?.ideas?.[s] || []) as any[]).map((i) => [i.ticker, i.live]));
 
   return (
     <div>
@@ -381,10 +401,17 @@ export default function Today({ status }: { status: Status | null }) {
       </div>
 
       <div className="section">
+        <SectionHead title={t("Bu piyasada ne mantıklı?", "What makes sense in this market?")}
+          sub={t("Trend, korku, stres, primler ve dealer gamma'sına göre öne çıkan strateji türü ve ayarları.", "The strategy type and settings that stand out given trend, fear, stress, premiums and dealer gamma.")} />
+        <Compass />
+      </div>
+
+      <div className="section">
         <SectionHead title={t("Bugün ne yapabilirsin?", "What can you do today?")}
           sub={t("Durumuna uyan yolu seç. Her fikir, kısa bir açıklama ve riskleriyle birlikte gelir.", "Pick the path that fits you. Every idea comes with a short explanation and its risks.")} />
+        <FreshnessNote f={ideasLive.data?.freshness} warnCount={ideasLive.data?.warn_count} />
         <div className="grid g3">
-          {(["csp", "cc", "leaps"] as Strat[]).map((s) => <StrategyCard key={s} s={s} ideas={d.ideas?.[s] || []} hasHoldings={hasHoldings} />)}
+          {(["csp", "cc", "leaps"] as Strat[]).map((s) => <StrategyCard key={s} s={s} ideas={d.ideas?.[s] || []} hasHoldings={hasHoldings} live={liveFor(s)} />)}
         </div>
       </div>
 

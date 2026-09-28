@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import ContractIdeas from "../components/ContractIdeas";
+import { FreshnessNote } from "../components/Freshness";
 import { Bubble, Icon, STRAT_STYLE } from "../components/Icon";
 import Scanner from "../components/Scanner";
 import { Col, Table } from "../components/Table";
@@ -60,6 +61,7 @@ export default function Ideas({ query }: { query: URLSearchParams }) {
   const t = useT();
   const pro = usePro();
   const { data, error, loading, reload } = useApi<any>("/screener");
+  const status = useApi<any>("/status");
   const [p, setP] = usePersisted("ideas", { s: "csp" as Strat, budget: "0", risk: "balanced" as Risk, horizon: "1w" as Horizon, noEarn: true, view: "cards" as "cards" | "table" });
   const [open, setOpen] = useState<string | null>(null);
   const [limit, setLimit] = useState(12);
@@ -146,6 +148,8 @@ export default function Ideas({ query }: { query: URLSearchParams }) {
             "Choose what you want to do and set your preferences; we'll pick the best fits from ~200 liquid stocks and explain them plainly.")}</p>
         </div>
       </div>
+
+      <FreshnessNote f={status.data?.freshness} />
 
       <Step n={1}>{t("Ne yapmak istiyorsun?", "What do you want to do?")}</Step>
       <div className="grid g3">

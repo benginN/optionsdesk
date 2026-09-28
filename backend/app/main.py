@@ -7,7 +7,7 @@ import logging
 import math
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query
@@ -15,8 +15,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db, jobs, journal, plan, services
-from .analytics import anomalies, market, metrics, scoring
+from .analytics import anomalies, bs, market, metrics, scoring, stance
 from .analytics.contracts import PRESETS, Filters, scan_chain
+from .analytics.pricing import prob_otm
 from .config import ET, FRONTEND_DIST
 from .data import cboe
 from .data.cache import market_is_open, memory
@@ -48,8 +49,10 @@ class CleanJSON(JSONResponse):
 async def lifespan(app: FastAPI):
     db.init_db()
     task = asyncio.create_task(jobs.scheduler())
+    warm = asyncio.create_task(warm_loop())
     yield
     task.cancel()
+    warm.cancel()
     await cboe.close_client()
 
 
@@ -102,7 +105,33 @@ async def status():
         "progress": jobs.progress,
         "last_run": db.last_run(),
         "rate": await risk_free_rate(),
+        "freshness": freshness(dates[0] if dates else None),
     }
+
+
+def expected_trade_date(now: datetime | None = None) -> date:
+    """Şu an elimizde olması gereken en son kapanış: 16:30 ET'si geçmiş en son hafta içi gün (tatiller hariç)."""
+    now = now or datetime.now(ET)
+    d = now.date()
+    if d.weekday() >= 5 or (now.hour, now.minute) < (16, 30):
+        d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def freshness(snapshot_date: str | None) -> dict:
+    """Snapshot kaç iş günü geride ve piyasa şu an açık mı (fikirler kapanış verisinden üretilir)."""
+    exp = expected_trade_date()
+    behind = None
+    if snapshot_date:
+        d = date.fromisoformat(snapshot_date)
+        behind = 0
+        while d < exp:
+            d += timedelta(days=1)
+            if d.weekday() < 5:
+                behind += 1
+    return {"snapshot": snapshot_date, "expected": exp.isoformat(), "behind": behind, "market_open": market_is_open()}
 
 
 @app.post("/api/snapshot")
@@ -257,6 +286,119 @@ async def market_live():
             "market_open": market_is_open(),
         }
     return await memory.get_or_fetch(f"market_live:{lang_var.get()}", 90 if market_is_open() else 900, build)
+
+
+# --- Strateji pusulası ------------------------------------------------------
+
+async def _build_stance() -> dict:
+    spy_rows, vix_rows, vix, board = await asyncio.gather(
+        cboe.history("SPY"), cboe.history("VIX"), jobs.fetch_vix(), _index_board("SPY"), return_exceptions=True)
+    spy_rows = spy_rows if isinstance(spy_rows, list) else []
+    vix_rows = vix_rows if isinstance(vix_rows, list) else []
+    vix = vix if isinstance(vix, dict) else {}
+    board = board if isinstance(board, dict) else None
+    d, rows = services.enriched_snapshot()
+    msnaps = db.load_market_snapshots(1)
+    agg = msnaps[-1]["agg"] if msnaps else None
+    ivps = sorted(m["iv_pos"] for m in rows.values() if m.get("iv_pos") is not None)
+    earnings = sorted(
+        [{"ticker": m["ticker"], "days": m["days_to_earnings"]} for m in rows.values()
+         if m.get("days_to_earnings") is not None and 0 <= m["days_to_earnings"] <= 7],
+        key=lambda x: x["days"])
+    out = stance.build(spy_rows, (board or {}).get("price"), vix, vix_rows, agg,
+                       ivps[len(ivps) // 2] if ivps else None, board, earnings, datetime.now(ET).date())
+    out["as_of"] = datetime.now(ET).isoformat(timespec="minutes")
+    out["snapshot_date"] = d
+    out["market_open"] = market_is_open()
+    return out
+
+
+def _warm_ttl() -> float:
+    # Isıtma döngüsü aralığının iki katı: döngü gecikse de önbellek boşalmaz
+    return 2 * _warm_every() + 60
+
+
+def _warm_every() -> float:
+    return 600 if market_is_open() else 1800
+
+
+@app.get("/api/market/stance")
+async def market_stance():
+    """Piyasa rejimine göre öne çıkan strateji türü (kurallar: analytics/stance.py)."""
+    return await memory.get_or_fetch(f"stance:{lang_var.get()}", _warm_ttl(), _build_stance)
+
+
+# --- Fikirler + canlı kontrol -------------------------------------------------
+
+async def _live_check(i: dict, key: str) -> dict | None:
+    """Kapanış verisinden seçilmiş fikri bugünkü zincirle yeniden hesaplar: aynı kontrat, güncel fiyat."""
+    c = i.get("c") or {}
+    try:
+        ch = await services.get_chain(i["ticker"])
+        exp = date.fromisoformat(c["expiry"])
+    except Exception:
+        return None
+    cp = "P" if key == "csp" else "C"
+    o = next((x for x in ch.by_exp.get(exp, {}).get(cp, []) if abs(x.strike - c["strike"]) < 1e-6), None)
+    ref = i.get("price") or 0
+    out: dict[str, Any] = {"spot": ch.spot, "move": ch.spot / ref - 1 if ref else None,
+                           "as_of": ch.as_of.isoformat(timespec="minutes"), "dte": ch.dte(exp), "mid": o.mid if o else None}
+    mv = out["move"]
+    # Uyarı yalnız ALEYHE hareket için: put satıcısına düşüş, call satıcısına yükseliş, LEAPS alıcısına düşüş.
+    if key in ("csp", "cc"):
+        out["itm"] = ch.spot < c["strike"] if cp == "P" else ch.spot > c["strike"]
+        if o and o.iv:
+            out["pop"] = prob_otm(ch, o)
+            out["touch"] = bs.prob_touch(ch.spot, o.strike, ch.T(exp), o.iv)
+        adverse = mv is not None and (mv <= -0.02 if cp == "P" else mv >= 0.02)
+        was = c.get("pop")
+        out["warn"] = bool(out["itm"] or adverse or (was is not None and out.get("pop") is not None and was - out["pop"] >= 0.10))
+    else:
+        be = c.get("breakeven")
+        out["be_move"] = be / ch.spot - 1 if be and ch.spot else None
+        out["warn"] = bool(mv is not None and mv <= -0.04)
+    return out
+
+
+@app.get("/api/ideas/live")
+async def ideas_live(n: int = Query(3, ge=1, le=8)):
+    """Strateji başına en iyi n fikir (Bugün sayfası/panel) + her biri için bugünkü fiyatla canlı kontrol."""
+    d, rows = services.enriched_snapshot()
+    if not rows:
+        return {"empty": True, "freshness": freshness(None)}
+    out = await memory.get_or_fetch(f"ideas_live:{d}:{n}", _warm_ttl(), lambda: _build_ideas_live(d, rows, n))
+    return {**out, "freshness": freshness(d)}
+
+
+async def _build_ideas_live(d: str, rows: dict, n: int) -> dict:
+    top = _top_ideas(rows, n)
+    pairs = [(k, i) for k, lst in top.items() for i in lst]
+    res = await services.gather_limited([_live_check(i, k) for k, i in pairs], limit=3)
+    for (k, i), r in zip(pairs, res):
+        c = i["c"] = dict(i.get("c") or {})  # önbellekteki snapshot satırını değiştirme
+        if k in ("csp", "cc") and c.get("pop") is not None:
+            c["touch"] = min(1.0, 2 * (1 - c["pop"]))
+        i["live"] = r if isinstance(r, dict) else None
+    return {"date": d, "ideas": top, "warn_count": sum(1 for _, i in pairs if (i.get("live") or {}).get("warn"))}
+
+
+async def warm_loop() -> None:
+    """Pusula ve canlı fikirleri arka planda önceden hesaplar: panel (Glance) ve Bugün sayfası beklemesin.
+    Toplu snapshot sürerken CBOE'yi yormamak için bekler."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            if not jobs.progress["running"]:
+                for lang in ("tr", "en"):
+                    set_lang(lang)
+                    memory.set(f"stance:{lang}", await _build_stance(), _warm_ttl())
+                d, rows = services.enriched_snapshot()
+                if rows:
+                    for n in (3, 4):
+                        memory.set(f"ideas_live:{d}:{n}", await _build_ideas_live(d, rows, n), _warm_ttl())
+        except Exception:
+            logging.getLogger("warm").exception("Isıtma hatası")
+        await asyncio.sleep(_warm_every())
 
 
 # --- Hisse tarayıcı -------------------------------------------------------

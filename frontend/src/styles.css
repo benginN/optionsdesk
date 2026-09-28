@@ -442,3 +442,14 @@ details.disclosure[open] > summary svg { transform: rotate(90deg); }
 .path-step:not(:last-child)::before { content: ""; position: absolute; left: 18px; top: 38px; bottom: 0; width: 2px; background: var(--line); }
 .path-step .n { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: var(--surface-2); border: 1px solid var(--line-strong); }
 .path-step.on .n { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+/* Strateji pusulası */
+.compass-title { font-size: 22px; margin-top: 4px; }
+.compass-params { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.compass-param { background: var(--surface-2); border-radius: 12px; padding: 10px 12px; }
+.compass-param strong { display: block; margin-top: 2px; font-size: 14px; }
+.compass-grid { gap: 22px; align-items: start; }
+.compass-signals li { padding: 9px 0; }
+.compass-fit li { padding: 7px 0; border-bottom: 0; }
+.compass-lines li { padding: 6px 0; color: var(--ink-2); }
+.live-note { margin-top: 3px; }

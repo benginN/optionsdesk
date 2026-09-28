@@ -6,6 +6,16 @@ type T = (tr: string, en: string) => string;
 const B = ({ children }: { children: ReactNode }) => <strong>{children}</strong>;
 
 export type Strat = "csp" | "cc" | "leaps" | "pcs" | "ccs";
+
+/** Vadeye kadar fiyatın strike'a en az bir kez değme olasılığı (≈ 2 × vade sonu ITM olasılığı).
+ * Canlı kontratta sunucunun p_touch'u, snapshot fikrinde aynı formülle pop'tan türetilir. */
+export function touchOf(c: any): number | null {
+  if (!c) return null;
+  if (c.p_touch != null) return c.p_touch;
+  if (c.touch != null) return c.touch;
+  const p = c.p_otm ?? c.pop;
+  return p != null ? Math.min(1, 2 * (1 - p)) : null;
+}
 export type Risk = "cautious" | "balanced" | "bold";
 export type Horizon = "1w" | "2w" | "1m";
 
@@ -58,12 +68,14 @@ export function explainContract(r: any, t: T, qty = 1): ReactNode {
         Sell the <B>{k} put</B> expiring <B>{d}</B> and collect <B>{prem}</B> today. If {tk} stays above {k} until then
         ({pct(r.p_otm ?? r.pop, 0)} chance), you keep it all. If it falls below, you buy {100 * qty} shares at an effective <B>{usd(r.breakeven)}</B>
         {" "}({pct(Math.abs(r.be_pct), 1)} below today). Cash to set aside: <B>{usd0(r.capital * qty)}</B>.
+        {touchOf(r) != null && <> Chance {tk} dips below {k} at least once before expiry: ~{pct(touchOf(r), 0)}.</>}
       </>
     ) : (
       <>
         <B>{d}</B> vadeli <B>{k} put</B> sat, bugün <B>{prem}</B> prim al. {tk} o tarihe kadar {k} üstünde kalırsa
         ({pct(r.p_otm ?? r.pop, 0)} olasılık) primin tamamı senin. Altına düşerse {100 * qty} hisseyi fiilen <B>{usd(r.breakeven)}</B> maliyetle
         almış olursun (bugünkü fiyatın {pct(Math.abs(r.be_pct), 1)} altında). Ayırman gereken nakit: <B>{usd0(r.capital * qty)}</B>.
+        {touchOf(r) != null && <> Vadeye kadar fiyatın en az bir kez {k} altına inme olasılığı ~{pct(touchOf(r), 0)}.</>}
       </>
     );
   }
@@ -73,12 +85,14 @@ export function explainContract(r: any, t: T, qty = 1): ReactNode {
         Against 100 shares of {tk}, sell the <B>{k} call</B> expiring <B>{d}</B> and collect <B>{prem}</B>. If {tk} stays below {k}
         ({pct(r.p_otm ?? r.pop, 0)} chance), you keep the premium and the shares. If it rises above, your shares are sold at {k}
         ({pct(r.otm_pct, 1)} above today).
+        {touchOf(r) != null && <> Chance it trades above {k} at least once before expiry: ~{pct(touchOf(r), 0)}.</>}
       </>
     ) : (
       <>
         Elindeki 100 {tk} hissesi için <B>{d}</B> vadeli <B>{k} call</B> sat, <B>{prem}</B> prim al. {tk} {k} altında kalırsa
         ({pct(r.p_otm ?? r.pop, 0)} olasılık) prim de hisseler de sende. Üstüne çıkarsa hisselerin {k} fiyatından satılır
         (bugünkü fiyatın {pct(r.otm_pct, 1)} üstünde).
+        {touchOf(r) != null && <> Vadeye kadar en az bir kez {k} üstüne çıkma olasılığı ~{pct(touchOf(r), 0)}.</>}
       </>
     );
   }
@@ -153,14 +167,14 @@ export function explainCandidate(_ticker: string, c: any, s: Strat, t: T): React
   const prem = usd0((c.premium || 0) * 100);
   if (s === "cc") {
     return isEn(t) ? (
-      <>A <B>{k} call</B> ({d}, {c.dte} days) pays <B>{prem}</B> per 100 shares — <B>{pct(c.yield, 2)}</B> on the stock.</>
+      <>A <B>{k} call</B> ({d}, {c.dte} days) pays <B>{prem}</B> per 100 shares — <B>{pct(c.yield, 2)}</B> on the stock.{c.pop != null && <> {pct(c.pop, 0)} chance you keep the premium and the shares; ~{pct(touchOf(c), 0)} chance it trades above {k} at least once before expiry.</>}</>
     ) : (
-      <><B>{k} call</B> ({d}, {c.dte} gün) 100 hisse başına <B>{prem}</B> öder; bu, hisse değerine göre <B>{pct(c.yield, 2)}</B> getiri.</>
+      <><B>{k} call</B> ({d}, {c.dte} gün) 100 hisse başına <B>{prem}</B> öder; bu, hisse değerine göre <B>{pct(c.yield, 2)}</B> getiri.{c.pop != null && <> Prim de hisseler de sende kalma olasılığı {pct(c.pop, 0)}; vadeye kadar en az bir kez {k} üstüne çıkma olasılığı ~{pct(touchOf(c), 0)}.</>}</>
     );
   }
   return isEn(t) ? (
-    <>A <B>{k} put</B> ({d}, {c.dte} days) pays <B>{prem}</B> on {usd0(c.capital)} of cash — <B>{pct(c.yield, 2)}</B>, with a {pct(c.pop, 0)} chance to keep it all.</>
+    <>A <B>{k} put</B> ({d}, {c.dte} days) pays <B>{prem}</B> on {usd0(c.capital)} of cash — <B>{pct(c.yield, 2)}</B>, with a {pct(c.pop, 0)} chance to keep it all. Chance the price dips below {k} at least once before expiry: ~{pct(touchOf(c), 0)}.</>
   ) : (
-    <><B>{k} put</B> ({d}, {c.dte} gün) {usd0(c.capital)} nakit karşılığı <B>{prem}</B> öder — <B>{pct(c.yield, 2)}</B>; primin tamamının sende kalma olasılığı {pct(c.pop, 0)}.</>
+    <><B>{k} put</B> ({d}, {c.dte} gün) {usd0(c.capital)} nakit karşılığı <B>{prem}</B> öder — <B>{pct(c.yield, 2)}</B>; primin tamamının sende kalma olasılığı {pct(c.pop, 0)}. Vadeye kadar fiyatın en az bir kez {k} altına inme olasılığı ~{pct(touchOf(c), 0)}.</>
   );
 }
