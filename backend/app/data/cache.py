@@ -15,6 +15,7 @@ class TTLCache:
     def __init__(self) -> None:
         self._store: dict[str, tuple[float, Any]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._last_purge = 0.0
 
     def get(self, key: str) -> Any | None:
         item = self._store.get(key)
@@ -27,7 +28,17 @@ class TTLCache:
         return value
 
     def set(self, key: str, value: Any, ttl: float) -> None:
-        self._store[key] = (time.time() + ttl, value)
+        now = time.time()
+        self._store[key] = (now + ttl, value)
+        # Süresi dolan kayıt yalnız okunurken silinirse, bir daha okunmayan (ör. bir kez bakılan hisse
+        # zinciri) bellekte sonsuza kadar kalır. Dakikada bir süpür.
+        if now - self._last_purge > 60:
+            self._last_purge = now
+            for k in [k for k, (exp, _) in self._store.items() if exp < now]:
+                self._store.pop(k, None)
+                lock = self._locks.get(k)
+                if lock is not None and not lock.locked():
+                    self._locks.pop(k, None)
 
     async def get_or_fetch(self, key: str, ttl: float, fetch: Callable[[], Awaitable[Any]]) -> Any:
         hit = self.get(key)

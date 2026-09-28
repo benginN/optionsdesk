@@ -57,7 +57,9 @@ def summary(snapshot_date: str | None, universe_size: int) -> dict:
 
 
 async def _refresh(t: str, rate: float, earn: dict) -> tuple[Chain, dict]:
-    raw = await cboe.raw_chain(t, fresh=True, store=True)   # store: sayfalar da taze zinciri kullanır
+    # store=False: ham zincirler büyük (hisse başına MB'larca); 200'ünü önbellekte tutmak Pi'de ~800 MB
+    # ediyordu (28 Eyl ölçümü). Hesaplanan satır yeter; sayfalar gerekince kendi zincirini çeker.
+    raw = await cboe.raw_chain(t, fresh=True, store=False)
     ch = Chain(raw, rate)
     if ch.spot <= 0 or not ch.options:
         raise cboe.DataError("Fiyat ya da zincir yok")
