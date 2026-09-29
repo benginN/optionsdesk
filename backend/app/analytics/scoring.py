@@ -79,13 +79,26 @@ def _risk_premium(m: dict, cand: dict | None) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
-def score_csp(m: dict, ivp: float | None) -> tuple[int | None, dict, list[str]]:
-    c = m.get("csp")
+_SELF = object()   # "adayı satırın kendisinden al" işareti (None = aday yok demek)
+
+
+def _ann(c: dict, ref_dte: int | None) -> float:
+    """Yıllık getiri. ref_dte verilirse o vadeye eşdeğer hale getirilir (× √(gün/ref)):
+    prim zamanın karekökü ile büyür, yıllıklandırınca uzun vade yapısal olarak düşük görünür.
+    Eşikler ~10 günlük kontrata göre ayarlı; farklı sürelerin skorları böylece aynı ölçekte kalır."""
+    a = max(c.get("ann") or 0, 0)
+    if ref_dte and c.get("dte"):
+        a *= math.sqrt(c["dte"] / ref_dte)
+    return a
+
+
+def score_csp(m: dict, ivp: float | None, c=_SELF, ref_dte: int | None = None) -> tuple[int | None, dict, list[str]]:
+    c = m.get("csp") if c is _SELF else c
     flags: list[str] = []
     if not c:
         return None, {}, [L("Uygun vade/strike yok", "No suitable expiry/strike")]
     parts = {
-        "prim": lin(math.sqrt(max(c.get("ann") or 0, 0)), math.sqrt(0.05), math.sqrt(0.9)),
+        "prim": lin(math.sqrt(_ann(c, ref_dte)), math.sqrt(0.05), math.sqrt(0.9)),
         "iv": ivp / 100 if ivp is not None else None,
         "risk_primi": _risk_premium(m, c),
         "likidite": _liq(c),
@@ -113,14 +126,14 @@ def score_csp(m: dict, ivp: float | None) -> tuple[int | None, dict, list[str]]:
     return int(round(max(0, min(100, score)))), parts, flags
 
 
-def score_cc(m: dict, ivp: float | None) -> tuple[int | None, dict, list[str]]:
-    c = m.get("cc")
+def score_cc(m: dict, ivp: float | None, c=_SELF, ref_dte: int | None = None) -> tuple[int | None, dict, list[str]]:
+    c = m.get("cc") if c is _SELF else c
     flags: list[str] = []
     if not c:
         return None, {}, [L("Uygun vade/strike yok", "No suitable expiry/strike")]
     skew = m.get("skew")
     parts = {
-        "prim": lin(math.sqrt(max(c.get("ann") or 0, 0)), math.sqrt(0.04), math.sqrt(0.7)),
+        "prim": lin(math.sqrt(_ann(c, ref_dte)), math.sqrt(0.04), math.sqrt(0.7)),
         "iv": ivp / 100 if ivp is not None else None,
         "risk_primi": _risk_premium(m, c),
         "likidite": _liq(c),
@@ -141,8 +154,8 @@ def score_cc(m: dict, ivp: float | None) -> tuple[int | None, dict, list[str]]:
     return int(round(max(0, min(100, score)))), parts, flags
 
 
-def score_leaps(m: dict, ivp: float | None) -> tuple[int | None, dict, list[str]]:
-    c = m.get("leaps")
+def score_leaps(m: dict, ivp: float | None, c=_SELF) -> tuple[int | None, dict, list[str]]:
+    c = m.get("leaps") if c is _SELF else c
     flags: list[str] = []
     if not c:
         return None, {}, [L("1 yıldan uzun vade yok", "No expiry beyond 1 year")]
@@ -165,6 +178,31 @@ def score_leaps(m: dict, ivp: float | None) -> tuple[int | None, dict, list[str]
         score = min(score, 45)
         flags.append(L("Geniş spread", "Wide spread"))
     return int(round(max(0, min(100, score)))), parts, flags
+
+
+PRIM_REF_DTE = 10   # metrics._csp_candidate / _cc_candidate hedef vadesi
+SCORERS = {"csp": score_csp, "cc": score_cc, "leaps": score_leaps}
+
+
+def for_preferences(row: dict, horizon: str, risk: str) -> dict:
+    """Zenginleştirilmiş satırı Fikirler sayfasındaki süre × risk tercihine göre yeniden kurar:
+    örnek kontrat o tercihin adayı olur, skor aynı formülle o kontrattan hesaplanır.
+    Adaylar yoksa (eski snapshot) satır olduğu gibi döner, `prefs_applied` False olur."""
+    alts = row.get("alts")
+    if not alts:
+        return {**row, "prefs_applied": False}
+    out = dict(row)
+    scores, parts, flags = dict(row["scores"]), dict(row["score_parts"]), dict(row["flags"])
+    for s in SCORERS:
+        if s == "leaps":
+            c = alts["leaps"].get(risk)
+            scores[s], parts[s], flags[s] = score_leaps(row, row.get("iv_pos"), c)
+        else:
+            c = alts[s].get(horizon, {}).get(risk)
+            scores[s], parts[s], flags[s] = SCORERS[s](row, row.get("iv_pos"), c, ref_dte=PRIM_REF_DTE)
+        out[s] = c
+    out.update(scores=scores, score_parts=parts, flags=flags, prefs_applied=True)
+    return out
 
 
 def vol_signal(ivp: float | None, rsi: float | None) -> dict:

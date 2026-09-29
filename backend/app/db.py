@@ -153,6 +153,18 @@ def save_snapshot(date: str, ticker: str, data: dict) -> None:
         )
 
 
+def strip_alts(before: str) -> int:
+    """Tercih adaylarını (metrics.alternatives) eski snapshot'lardan siler: yalnız en sonuncusu kullanılır,
+    tutulursa veritabanı her gün ~1 MB büyürdü."""
+    with db() as conn:
+        cur = conn.execute(
+            "UPDATE snapshots SET data = json_remove(data, '$.alts') "
+            "WHERE date < ? AND json_type(data, '$.alts') IS NOT NULL",
+            (before,),
+        )
+        return cur.rowcount
+
+
 def save_market_snapshot(date: str, data: dict) -> None:
     with db() as conn:
         conn.execute(

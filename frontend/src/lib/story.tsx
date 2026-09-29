@@ -39,7 +39,9 @@ export function stratPitch(s: Strat, t: T) {
   }[s];
 }
 
-/** Basit mod risk/süre tercihlerini tarayıcı filtrelerine çevirir */
+/** Basit mod risk/süre tercihlerini tarayıcı filtrelerine çevirir.
+ * Aralıklar ve eşikler arka uçtaki metrics.HORIZONS / RISK_DELTA / ALT_* ile BİREBİR aynı olmalı:
+ * Fikirler listesi oradan kurulur, "Kontratları gör" buradan; biri değişirse öteki de değişmeli. */
 export function filtersFor(s: Strat, risk: Risk, horizon: Horizon, budget: number | null, noEarnings: boolean) {
   const dteMap: Record<Horizon, [number, number]> = { "1w": [3, 9], "2w": [8, 17], "1m": [20, 45] };
   const deltaShort: Record<Risk, [number, number]> = { cautious: [0.08, 0.2], balanced: [0.15, 0.3], bold: [0.25, 0.42] };

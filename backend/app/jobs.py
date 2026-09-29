@@ -94,6 +94,7 @@ async def run_snapshot(tickers: list[str] | None = None) -> dict:
             progress["trade_date"] = trade_date
             for m in ok_rows:
                 db.save_snapshot(trade_date, m["ticker"], m)
+            db.strip_alts(before=trade_date)
             agg = market.aggregate(ok_rows)
             vix = await fetch_vix()
             vix.pop("vix_series", None)

@@ -442,11 +442,17 @@ async def warm_loop() -> None:
 # --- Hisse tarayıcı -------------------------------------------------------
 
 @app.get("/api/screener")
-async def screener():
-    d, rows = services.current_rows()
+async def screener(h: str | None = None, risk: str | None = None):
+    """h (1w/2w/1m) ve risk (cautious/balanced/bold) verilirse örnek kontrat ve skor o tercihe göredir."""
+    if h is not None or risk is not None:
+        if h not in metrics.HORIZONS or risk not in metrics.RISK_DELTA:
+            raise HTTPException(400, L("Geçersiz süre ya da risk tercihi", "Invalid timeframe or risk preference"))
+        d, rows = services.rows_for_preferences(h, risk)
+    else:
+        d, rows = services.current_rows()
     out = []
     for m in rows.values():
-        r = {k: v for k, v in m.items() if k not in ("unusual",)}
+        r = {k: v for k, v in m.items() if k not in ("unusual", "alts")}
         r["name"] = _name(m)
         out.append(r)
     out.sort(key=lambda r: (r.get("scores") or {}).get("csp") or 0, reverse=True)

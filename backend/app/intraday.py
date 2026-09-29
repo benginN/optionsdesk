@@ -31,6 +31,7 @@ from .data.rates import risk_free_rate
 
 ENABLED = os.environ.get("INTRADAY_REFRESH", "0").strip().lower() in ("1", "true", "yes", "on")
 PACE = max(3.0, float(os.environ.get("INTRADAY_PACE_SEC", "6") or 6))
+STALE_FOR_HOLIDAY = 3      # art arda bu kadar hissenin fiyatı dünden kalmışsa piyasa tatildedir
 THROTTLED_INTERVAL = 3.0   # CBOE aralayıcısı bu kadar yavaşladıysa (429 sonrası) taramayı duraklat
 
 log = logging.getLogger("intraday")
@@ -75,6 +76,7 @@ async def loop(busy: Callable[[], bool], on_update: Callable[[], None] | None = 
     if not ENABLED:
         return
     await asyncio.sleep(45)
+    stale = 0
     while True:
         try:
             if not market_is_open() or busy():
@@ -101,15 +103,22 @@ async def loop(busy: Callable[[], bool], on_update: Callable[[], None] | None = 
                     earn = {}
                 ch, m = await _refresh(t, rate, earn)
                 if ch.as_of.astimezone(ET).date() < datetime.now(ET).date():
-                    # Saat "açık" diyor ama fiyat bugünden değil: resmi tatil. Yarım saat bekle.
-                    state.update(running=False, paused="holiday")
-                    await asyncio.sleep(1800)
-                    continue
-                rows[t] = m
-                state["version"] += 1
-                state["last"] = datetime.now(ET).isoformat(timespec="seconds")
-                if on_update:
-                    on_update()
+                    # Saat "açık" diyor ama fiyat bugünden değil. Tek hisse bunu tek başına yapabilir
+                    # (29 Eyl: bir hisse yüzünden normal günde 30 dk durdu); art arda birkaç hisse
+                    # bayatsa resmi tatildir, yarım saat bekle. Bayat satır kaydedilmez.
+                    stale += 1
+                    if stale >= STALE_FOR_HOLIDAY:
+                        stale = 0
+                        state.update(running=False, paused="holiday")
+                        await asyncio.sleep(1800)
+                        continue
+                else:
+                    stale = 0
+                    rows[t] = m
+                    state["version"] += 1
+                    state["last"] = datetime.now(ET).isoformat(timespec="seconds")
+                    if on_update:
+                        on_update()
             except Exception as e:
                 state["errors"] += 1
                 log.debug("Gün içi tarama %s: %s", t, e)

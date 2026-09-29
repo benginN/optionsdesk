@@ -13,6 +13,7 @@ from .data.rates import risk_free_rate
 
 _enriched_cache: dict = {"key": None, "rows": {}, "ivh": {}}
 _current_cache: dict = {"key": None, "rows": {}}
+_prefs_cache: dict = {"key": None, "rows": {}}
 
 
 async def get_chain(sym: str, fresh: bool = False) -> Chain:
@@ -76,6 +77,19 @@ def current_rows() -> tuple[str | None, dict[str, dict]]:
     return d, _current_cache["rows"]
 
 
+def rows_for_preferences(horizon: str, risk: str) -> tuple[str | None, dict[str, dict]]:
+    """current_rows(), Fikirler sayfasındaki süre × risk tercihine göre yeniden skorlanmış hali."""
+    d, rows = current_rows()
+    base = (_enriched_cache["key"], intraday.state["version"])
+    if _prefs_cache["key"] != base:
+        _prefs_cache.update(key=base, rows={})
+    got = _prefs_cache["rows"].get((horizon, risk))
+    if got is None:
+        got = {t: scoring.for_preferences(m, horizon, risk) for t, m in rows.items()}
+        _prefs_cache["rows"][(horizon, risk)] = got
+    return d, got
+
+
 def live_meta(d: str | None) -> dict:
     return intraday.summary(d, len(db.get_universe()))
 
@@ -83,6 +97,7 @@ def live_meta(d: str | None) -> dict:
 def invalidate() -> None:
     _enriched_cache.update(key=None, rows={}, ivh={})
     _current_cache.update(key=None, rows={})
+    _prefs_cache.update(key=None, rows={})
 
 
 async def gather_limited(coros, limit: int = 6):

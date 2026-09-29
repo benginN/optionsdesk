@@ -12,7 +12,23 @@ import { Horizon, Risk, Strat, explainCandidate, reasons, stratName, stratPitch 
 import { usePro, useT } from "../prefs";
 import { SignalPill } from "./Today";
 
-const BUDGETS = ["0", "2000", "5000", "10000", "25000"];
+// İşlem başına sermaye aralığı "alt-üst" (0 = sınır yok). Tek sayı = eski kayıt (yalnız üst sınırdı).
+const BUDGETS = ["0", "0-2000", "2000-5000", "5000-10000", "10000-25000"];
+const LEGACY_BUDGET: Record<string, string> = { "2000": "0-2000", "5000": "2000-5000", "10000": "5000-10000", "25000": "10000-25000" };
+
+function budgetRange(v: string): [number, number] | null {
+  const b = LEGACY_BUDGET[v] ?? v;
+  if (!b.includes("-")) return null;
+  const [lo, hi] = b.split("-").map(Number);
+  return [lo || 0, hi || Infinity];
+}
+
+function budgetLabel(v: string, t: (tr: string, en: string) => string) {
+  const r = budgetRange(v);
+  if (!r) return t("Hepsi", "Any");
+  const k = (n: number) => `$${n / 1000}k`;
+  return r[0] ? `${k(r[0])}–${k(r[1])}` : `≤${k(r[1])}`;
+}
 
 function capitalOf(r: any, s: Strat): number | null {
   if (s === "csp") return r.csp?.capital ?? null;
@@ -35,7 +51,13 @@ function IdeaCard({ r, s, open, onToggle, prefs }: { r: any; s: Strat; open: boo
           </a>
           <div className="small mt4">
             <span className="num" style={{ fontWeight: 600 }}>{usd(r.price)}</span> <span className={cls(r.change_pct)}>{spct(r.change_pct)}</span>
-            {r.em30_low && <span className="muted"> · {t("30 günde beklenen", "30-day range")} {usd(r.em30_low, 0)}–{usd(r.em30_high, 0)}</span>}
+            {s !== "leaps" && r[s]?.em_pct != null ? (
+              <span className="muted"> · {t(`Vadeye kadar (${r[s].dte} gün) beklenen`, `Expected by expiry (${r[s].dte}d)`)} ±{pct(r[s].em_pct, 1)} {usd(r.price * (1 - r[s].em_pct), 0)}–{usd(r.price * (1 + r[s].em_pct), 0)}</span>
+            ) : r.em30_low && <span className="muted"> · {t("30 günde beklenen", "30-day range")} {usd(r.em30_low, 0)}–{usd(r.em30_high, 0)}</span>}
+          </div>
+          <div className="small muted mt4">
+            IV30 {vol(r.iv30)}
+            {r.iv_rank != null ? <> · IV Rank {num(r.iv_rank, 0)}</> : r.iv_pos != null && <> · {t("IV konumu", "IV position")} ≈{num(r.iv_pos, 0)}</>}
           </div>
         </div>
         <Verdict s={r.scores?.[s]} parts={r.score_parts?.[s]} />
@@ -60,9 +82,10 @@ function IdeaCard({ r, s, open, onToggle, prefs }: { r: any; s: Strat; open: boo
 export default function Ideas({ query }: { query: URLSearchParams }) {
   const t = useT();
   const pro = usePro();
-  const { data, error, loading, reload } = useApi<any>("/screener");
-  const status = useApi<any>("/status");
   const [p, setP] = usePersisted("ideas", { s: "csp" as Strat, budget: "0", risk: "balanced" as Risk, horizon: "1w" as Horizon, noEarn: true, view: "cards" as "cards" | "table" });
+  // Liste de tercihe göre kurulur: her hissenin örnek kontratı ve skoru seçilen süre × riskten gelir
+  const { data, error, loading, reload } = useApi<any>(`/screener?h=${p.horizon}&risk=${p.risk}`);
+  const status = useApi<any>("/status");
   const [open, setOpen] = useState<string | null>(null);
   const [limit, setLimit] = useState(12);
   const qs = query.get("s") as Strat | null;
@@ -82,15 +105,17 @@ export default function Ideas({ query }: { query: URLSearchParams }) {
   }, [qt, data]);
 
   const s = p.s;
-  const budget = Number(p.budget) || null;
+  const range = budgetRange(p.budget);
+  const budget = range && Number.isFinite(range[1]) ? range[1] : null;
+  const pending = (data?.rows as any[] | undefined)?.filter((r) => r.prefs_applied === false).length ?? 0;
 
   const rows = useMemo(() => {
     if (!data?.rows) return [];
     const list = (data.rows as any[])
-      .filter((r) => r.scores?.[s] != null && r[s])
-      .filter((r) => !budget || (capitalOf(r, s) ?? Infinity) <= budget)
+      .filter((r) => r.prefs_applied !== false && r.scores?.[s] != null && r[s])
+      .filter((r) => { const c = capitalOf(r, s) ?? Infinity; return !range || (c >= range[0] && c <= range[1]); })
       .filter((r) => (r[s]?.spread_pct ?? 1) <= 0.2)
-      .filter((r) => !p.noEarn || !(r.days_to_earnings != null && r.days_to_earnings >= 0 && r.days_to_earnings <= (s === "leaps" ? 0 : r[s]?.dte ?? 0)))
+      .filter((r) => !p.noEarn || s === "leaps" || !(r[s]?.earnings ?? (r.days_to_earnings != null && r.days_to_earnings >= 0 && r.days_to_earnings <= (r[s]?.dte ?? 0))))
       .sort((a, b) => (b.scores[s] ?? 0) - (a.scores[s] ?? 0));
     // Adresle gelen hisse listede yoksa başa ekle
     if (qt) {
@@ -99,7 +124,7 @@ export default function Ideas({ query }: { query: URLSearchParams }) {
       if (item) list.unshift(item);
     }
     return list;
-  }, [data, s, budget, p.noEarn, qt]);
+  }, [data, s, p.budget, p.noEarn, qt]);
 
   const riskHelp: Record<Risk, string> = {
     cautious: t("Strike fiyattan uzak: prim daha az, atanma ihtimali ~%10–20.", "Strike far from price: less premium, ~10–20% chance of assignment."),
@@ -115,7 +140,16 @@ export default function Ideas({ query }: { query: URLSearchParams }) {
   const tableCols: Col<any>[] = [
     { key: "ticker", label: t("Hisse", "Stock"), left: true, render: (r) => <TickerLink t={r.ticker} name={r.name} />, sort: (r) => r.ticker },
     { key: "price", label: t("Fiyat", "Price"), render: (r) => <>{usd(r.price)}<div className={`small ${cls(r.change_pct)}`}>{spct(r.change_pct)}</div></>, sort: (r) => r.price },
-    { key: "em", label: t("30g aralık", "30d range"), info: "em", render: (r) => <>±{pct(r.em30_pct)}<div className="small muted">{num(r.em30_low)}–{num(r.em30_high)}</div></>, sort: (r) => r.em30_pct },
+    {
+      key: "em", label: s === "leaps" ? t("30g aralık", "30d range") : t("Vadeye kadar", "To expiry"), info: "em",
+      render: (r) => {
+        const e = s !== "leaps" ? r[s]?.em_pct : null;
+        return e != null
+          ? <>±{pct(e)}<div className="small muted">{num(r.price * (1 - e))}–{num(r.price * (1 + e))}</div></>
+          : <>±{pct(r.em30_pct)}<div className="small muted">{num(r.em30_low)}–{num(r.em30_high)}</div></>;
+      },
+      sort: (r) => (s !== "leaps" ? r[s]?.em_pct : null) ?? r.em30_pct,
+    },
     { key: "iv", label: "IV30", info: "iv30", render: (r) => vol(r.iv30), sort: (r) => r.iv30 },
     { key: "ivp", label: "IV Pos", info: "ivpos", render: (r) => `${num(r.iv_pos, 0)}${r.iv_pos_source === "hv" ? "≈" : ""}`, sort: (r) => r.iv_pos },
     { key: "vrp", label: "IV/HV", info: "vrp", render: (r) => num(r.vrp), sort: (r) => r.vrp, hideSm: true },
@@ -173,10 +207,10 @@ export default function Ideas({ query }: { query: URLSearchParams }) {
           <div className="grid g3" style={{ gap: 22 }}>
             <div className="field">
               <label>{t("İşlem başına bütçe", "Budget per trade")}</label>
-              <Seg value={p.budget} onChange={(v) => setP({ ...p, budget: v })}
-                options={BUDGETS.map((b) => ({ v: b, l: b === "0" ? t("Hepsi", "Any") : `$${Number(b) / 1000}k` }))} />
-              <span className="help">{s === "csp" ? t("En fazla bu kadar nakit bağlansın (put için strike × 100).", "At most this much cash tied up (strike × 100 for a put).")
-                : s === "cc" ? t("Covered call için 100 hisse gerekir.", "A covered call needs 100 shares.") : t("Bir LEAPS kontratının maliyeti.", "The cost of one LEAPS contract.")}</span>
+              <Seg value={LEGACY_BUDGET[p.budget] ?? p.budget} onChange={(v) => setP({ ...p, budget: v })}
+                options={BUDGETS.map((b) => ({ v: b, l: budgetLabel(b, t) }))} />
+              <span className="help">{s === "csp" ? t("Bağlanacak nakit bu aralıkta olsun (put için strike × 100).", "Cash tied up falls in this range (strike × 100 for a put).")
+                : s === "cc" ? t("100 hissenin değeri bu aralıkta olsun (covered call için 100 hisse gerekir).", "Value of 100 shares falls in this range (a covered call needs 100 shares).") : t("Bir LEAPS kontratının maliyeti bu aralıkta olsun.", "One LEAPS contract costs within this range.")}</span>
             </div>
             <div className="field">
               <label>{t("Risk tercihin", "Your risk appetite")}</label>
@@ -206,6 +240,10 @@ export default function Ideas({ query }: { query: URLSearchParams }) {
           <Step n={3}>{t("Fikirler", "Ideas")} {rows.length > 0 && <span className="muted" style={{ fontWeight: 500 }}>· {rows.length}</span>}</Step>
           {pro && <Seg sm value={p.view} onChange={(v) => setP({ ...p, view: v })} options={[{ v: "cards", l: t("Kartlar", "Cards") }, { v: "table", l: t("Tablo", "Table") }]} />}
         </div>
+        {pending > 0 && (
+          <div className="mb"><Callout tone="info">{t(`${pending} hissenin süre/risk tercihine göre hesabı henüz yok; bir sonraki taramada listeye girerler (piyasa açıkken ~20 dk, kapalıyken akşamki kapanış taraması).`,
+            `${pending} stocks aren't computed for this timeframe/risk yet; they'll join after the next scan (~20 min while the market is open, otherwise the evening close scan).`)}</Callout><div className="mt16" /></div>
+        )}
         {data && data.iv_history_days < 20 && pro && (
           <div className="mb"><Callout tone="info">{t(`IV geçmişi birikiyor (${data.iv_history_days}/20 gün). O zamana kadar "opsiyonlar ne kadar pahalı" ölçüsü tahminidir (≈).`,
             `IV history is building (${data.iv_history_days}/20 days). Until then, the "how expensive are options" measure is an estimate (≈).`)}</Callout><div className="mt16" /></div>
@@ -215,7 +253,7 @@ export default function Ideas({ query }: { query: URLSearchParams }) {
         ) : pro && p.view === "table" ? (
           <Card flush><Table<any> rows={rows} cols={tableCols} rowKey={(r) => r.ticker} initialSort="score" maxRows={60} onRowClick={(r) => go(`/stock/${r.ticker}`)} /></Card>
         ) : rows.length === 0 ? (
-          <Card><Empty title={t("Bu tercihlere uyan fikir yok", "No ideas match these preferences")}>{t("Bütçeyi artırmayı ya da bilanço filtresini kapatmayı dene.", "Try a bigger budget or turning off the earnings filter.")}</Empty></Card>
+          <Card><Empty title={t("Bu tercihlere uyan fikir yok", "No ideas match these preferences")}>{t("Başka bir bütçe aralığı, süre ya da risk seviyesi seçmeyi veya bilanço filtresini kapatmayı dene.", "Try another budget range, timeframe or risk level, or turn off the earnings filter.")}</Empty></Card>
         ) : (
           <>
             <div className="grid g2">
